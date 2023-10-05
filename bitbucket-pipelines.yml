@@ -1,0 +1,73 @@
+--- 
+image: "maven:3.8.4-openjdk-11"
+pipelines: 
+  branches: 
+    master: 
+      - 
+        step: 
+          caches:
+            - docker
+            - maven
+          artifacts: 
+            - target/**
+          name: Build
+          script: 
+            - mvn clean install
+            - echo ${ACR_PASSWORD} | docker login $AZURE_ACR_URL --username "$ACR_USERNAME" --password-stdin 
+            - docker build -t ${AZURE_ACR_URL}/userservices/rfpintels-userservices:latest .
+            - docker push ${AZURE_ACR_URL}/userservices/rfpintels-userservices:latest
+          services:
+            - docker
+      - 
+        step: 
+          deployment: Dev
+          name: "Deploy to Development"
+          script:
+            - export ENV="dev"
+            - echo "Deploying to $ENV"
+            - 
+              pipe: "atlassian/azure-aks-deploy:1.0.2"
+              variables: 
+                AZURE_AKS_NAME: RFPIntels_kubernates
+                AZURE_APP_ID: $AZURE_APP_ID
+                AZURE_LOGIN_NON_INTERACTIVE: "true"
+                AZURE_PASSWORD: $AZURE_PASSWORD
+                AZURE_RESOURCE_GROUP: RFPIntels_Devops
+                AZURE_TENANT_ID: $AZURE_TENANT_ID
+                DEBUG: "true"
+                KUBECTL_COMMAND: 'apply'
+                KUBECTL_ARGUMENTS: '-f rfpintels-userservices-$ENV.yaml -n rfpintels-$ENV'
+            - 
+              pipe: "atlassian/azure-aks-deploy:1.0.2"
+              variables: 
+                AZURE_AKS_NAME: RFPIntels_kubernates
+                AZURE_APP_ID: $AZURE_APP_ID
+                AZURE_LOGIN_NON_INTERACTIVE: "true"
+                AZURE_PASSWORD: $AZURE_PASSWORD
+                AZURE_RESOURCE_GROUP: RFPIntels_Devops
+                AZURE_TENANT_ID: $AZURE_TENANT_ID
+                DEBUG: "true"
+                KUBECTL_COMMAND: 'rollout restart'
+                KUBECTL_ARGUMENTS: 'deployment/rfpintels-userservices -n rfpintels-$ENV'
+          trigger: manual
+  default: 
+    - 
+      parallel: 
+        - 
+          step: 
+            after-script: 
+              - 
+                pipe: "atlassian/checkstyle-report:0.3.0"
+                variables: 
+                  DEBUG: "true"
+            caches: 
+              - maven
+            name: "Build and Test"
+            script: 
+              - "./mvnw verify --file pom.xml"
+        - 
+          step: 
+            name: "Security Scan"
+            script: 
+              - 
+                pipe: "atlassian/git-secrets-scan:0.5.1"
